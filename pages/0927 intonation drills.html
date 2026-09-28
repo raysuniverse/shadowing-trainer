@@ -436,6 +436,16 @@ function makeCard(clip,annot,drill){
   // user overlay group + replay playhead
   const ug=el("g",{},svg);
   const uph=el("line",{y1:MT,y2:H-MB,stroke:"var(--user)","stroke-width":1.6,opacity:0},svg);
+  // target playhead — tracks the original speaker whenever her audio plays
+  const tph=el("line",{y1:MT,y2:H-MB,stroke:"var(--target)","stroke-width":1.6,opacity:0},svg);
+  const tickTarget=()=>{
+    if(a.paused){tph.setAttribute("opacity",0);return;}
+    const t=Math.min(a.currentTime,clip.dur);
+    tph.setAttribute("opacity",.85);
+    tph.setAttribute("x1",xf(t));tph.setAttribute("x2",xf(t));
+    requestAnimationFrame(tickTarget);
+  };
+  a.addEventListener("play",()=>requestAnimationFrame(tickTarget));
   card.appendChild(svg);
   const takesEl=document.createElement("div");takesEl.className="takes";card.appendChild(takesEl);
   const hint=document.createElement("div");hint.className="hint";card.appendChild(hint);
