@@ -53,6 +53,7 @@ section.open .secbody{display:block}
   background:var(--plane);padding:12px 16px;font-size:13.5px;color:var(--ink2);margin-top:12px;
   max-width:85ch}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:14px;margin-top:16px}
+.grid.one{grid-template-columns:1fr}
 .pairrow{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-top:14px}
 .pairmid{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:86px}
 .pairmid .rst{font-size:12px;font-weight:600;color:var(--accent);text-align:center}
@@ -72,6 +73,16 @@ section.open .secbody{display:block}
 .badge{margin-left:auto;font-size:11.5px;color:var(--ink2);background:var(--plane);
   border-radius:100px;padding:2px 10px;white-space:nowrap}
 .card svg{display:block;width:100%;margin-top:8px}
+.takes{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.take{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);
+  border-radius:100px;padding:2px 9px;font-size:11.5px;color:var(--ink2);cursor:pointer;
+  background:#fff}
+.take.sel{border-color:var(--target);background:var(--targetLight);color:var(--ink)}
+.take b{font-weight:600}
+.tbtn{border:none;background:none;cursor:pointer;font:inherit;font-size:11px;
+  padding:0 2px;color:inherit;line-height:1}
+.tbtn:hover{color:var(--target)}
+.tbtn.tkeep{font-size:13px}
 .hint{font-size:11px;color:var(--mute);margin-top:4px}
 footer{margin-top:50px;color:var(--mute);font-size:12px;border-top:1px solid var(--grid);padding-top:14px}
 #tip{position:fixed;pointer-events:none;background:var(--ink);color:#fff;border-radius:8px;
@@ -93,7 +104,11 @@ footer{margin-top:50px;color:var(--mute);font-size:12px;border-top:1px solid var
   <div id="sections"></div>
   <footer>Semitones are relative to the speaker's overall median (0 line), the same reference for every clip. Your recorded contour is plotted
   against <i>your own</i> median, so only the shape is compared. Floor line = this clip's 5th
-  percentile; ceiling guide = +4 st.</footer>
+  percentile; ceiling guide = +4 st.<br>
+  Recordings become <b>takes</b> under each card — record as many as you like and click a chip
+  to switch between them. <b>★</b> keeps a take in this browser (on this device) across
+  reloads; <b>⬇</b> downloads it as an audio file; unstarred takes vanish when you leave the
+  page.</footer>
 </div>
 <div id="tip"></div>
 
@@ -102,6 +117,30 @@ footer{margin-top:50px;color:var(--mute);font-size:12px;border-top:1px solid var
 "use strict";
 const DATA = JSON.parse(document.getElementById("payload").textContent);
 const tip = document.getElementById("tip");
+const PAGE=decodeURIComponent(location.pathname.split("/").pop());
+const PAGESTEM=PAGE.replace(/\.html$/,"");
+const CARDMAP={};
+
+/* ---------- kept-take storage (IndexedDB, per browser) ---------- */
+let dbP=null;
+function db(){
+  if(!dbP)dbP=new Promise((res,rej)=>{
+    const r=indexedDB.open("shadowing-takes",1);
+    r.onupgradeneeded=()=>{const s=r.result.createObjectStore("takes",{keyPath:"id",autoIncrement:true});
+      s.createIndex("page","page");};
+    r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);
+  });
+  return dbP;
+}
+async function dbAdd(rec){const d=await db();return new Promise((res,rej)=>{
+  const rq=d.transaction("takes","readwrite").objectStore("takes").add(rec);
+  rq.onsuccess=()=>res(rq.result);rq.onerror=()=>rej(rq.error);});}
+async function dbDel(id){const d=await db();return new Promise((res,rej)=>{
+  const rq=d.transaction("takes","readwrite").objectStore("takes").delete(id);
+  rq.onsuccess=()=>res();rq.onerror=()=>rej(rq.error);});}
+async function dbAll(page){const d=await db();return new Promise((res,rej)=>{
+  const rq=d.transaction("takes").objectStore("takes").index("page").getAll(IDBKeyRange.only(page));
+  rq.onsuccess=()=>res(rq.result);rq.onerror=()=>rej(rq.error);});}
 const NS = "http://www.w3.org/2000/svg";
 const Y_LO = DATA.yLo!==undefined?DATA.yLo:-12, Y_HI = DATA.yHi!==undefined?DATA.yHi:16;
 function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e;}
@@ -144,28 +183,26 @@ function stopRec(){
   clearInterval(recState.timer);
   const rs=recState;recState=null;
   const card=rs.card;
+  const s=rs.samples.filter(p=>p.f);
+  const good=s.length>=8;
   if(rs.mediaRec&&rs.mediaRec.state!=="inactive"){
-    rs.mediaRec.onstop=()=>{
-      if(card.userUrl)URL.revokeObjectURL(card.userUrl);
-      card.userUrl=URL.createObjectURL(new Blob(rs.chunks,{type:rs.mediaRec.mimeType||"audio/webm"}));
-      card.userAudio=new Audio(card.userUrl);
-      card.showReplay();
-    };
+    if(good){
+      const fs=s.map(p=>p.f).sort((a,b)=>a-b);
+      const med=fs[Math.floor(fs.length/2)];
+      const t0=s[0].t, span=s[s.length-1].t-t0 || 1;
+      const scale=card.clip.dur/Math.max(span, 0.4);
+      const user=s.map(p=>[(p.t-t0)*scale, 12*Math.log2(p.f/med)]);
+      rs.mediaRec.onstop=()=>{
+        const blob=new Blob(rs.chunks,{type:rs.mediaRec.mimeType||"audio/webm"});
+        card.addTake({blob,user,userT0:t0,userScale:scale});
+      };
+    }
     rs.mediaRec.stop();
   }
   rs.stream.getTracks().forEach(t=>t.stop());
   rs.ctx.close();
   rs.btn.classList.remove("on");rs.btn.textContent="● record";
-  const s=rs.samples.filter(p=>p.f);
-  if(s.length<8){card.hint.textContent="Barely heard you — get closer to the mic and re-record.";return;}
-  const fs=s.map(p=>p.f).sort((a,b)=>a-b);
-  const med=fs[Math.floor(fs.length/2)];
-  const t0=s[0].t, span=s[s.length-1].t-t0 || 1;
-  const scale=card.clip.dur/Math.max(span, 0.4);
-  card.userT0=t0;card.userScale=scale;
-  card.user=s.map(p=>[(p.t-t0)*scale, 12*Math.log2(p.f/med)]);
-  card.drawUser();
-  card.hint.textContent="Your shape (dashed) vs target — time-stretched to match. ▶ mine replays you; ▶ A/B plays target then you.";
+  if(!good)card.hint.textContent="Barely heard you — get closer to the mic and re-record.";
 }
 async function record(card,btn){
   if(recState){stopRec();return;}
@@ -193,7 +230,7 @@ async function record(card,btn){
 }
 
 /* ---------- card rendering ---------- */
-const W=520,H=170,ML=34,MR=12,MT=10,MB=24;
+const W=DATA.wide?1000:520,H=170,ML=34,MR=12,MT=10,MB=24;
 function yf(s){return MT+(Y_HI-s)/(Y_HI-Y_LO)*(H-MT-MB);}
 function makeCard(clip,annot,drill){
   const card=document.createElement("div");card.className="card";
@@ -295,6 +332,7 @@ function makeCard(clip,annot,drill){
   const ug=el("g",{},svg);
   const uph=el("line",{y1:MT,y2:H-MB,stroke:"var(--user)","stroke-width":1.6,opacity:0},svg);
   card.appendChild(svg);
+  const takesEl=document.createElement("div");takesEl.className="takes";card.appendChild(takesEl);
   const hint=document.createElement("div");hint.className="hint";card.appendChild(hint);
   // hover tooltip
   svg.addEventListener("mousemove",ev=>{
@@ -317,18 +355,69 @@ function makeCard(clip,annot,drill){
   loop.onclick=()=>{looping=!looping;loop.classList.toggle("on",looping);if(curAudio===a)a.loop=looping;};
   slow.onclick=()=>{rate=rate===1?0.75:1;slow.classList.toggle("on",rate!==1);if(curAudio===a)a.playbackRate=rate;};
   play.onclick=()=>playClip(a,play,looping,rate);
-  const cardObj={clip,hint,user:null,
-  showReplay(){mine.disabled=false;both.disabled=false;},
+  const cardObj={clip,hint,takes:[],sel:null,nextN:1,
+  clipId:(drill&&drill.key?drill.key+"/":"")+clip.file,
+  addTake(t,keptId){
+    t.n=this.nextN++;
+    t.url=URL.createObjectURL(t.blob);
+    t.audio=new Audio(t.url);
+    t.keptId=keptId||null;
+    const chip=document.createElement("span");chip.className="take";
+    chip.innerHTML=`<b>take ${t.n}</b><button class="tbtn tplay" title="play this take">▶</button>`+
+      `<button class="tbtn tkeep" title="keep in this browser">${t.keptId?"★":"☆"}</button>`+
+      `<button class="tbtn tdl" title="download as a file">⬇</button>`+
+      `<button class="tbtn tdel" title="delete">✕</button>`;
+    t.chip=chip;takesEl.appendChild(chip);
+    chip.onclick=e=>{if(!e.target.classList.contains("tbtn"))this.select(t);};
+    chip.querySelector(".tplay").onclick=()=>{this.select(t);this.playMine(mine);};
+    chip.querySelector(".tkeep").onclick=async ev=>{
+      const b=ev.target;
+      try{
+        if(t.keptId){await dbDel(t.keptId);t.keptId=null;b.textContent="☆";
+          this.hint.textContent=`Take ${t.n} no longer kept (gone after reload).`;}
+        else{t.keptId=await dbAdd({page:PAGE,clip:this.clipId,ts:Date.now(),
+            blob:t.blob,user:t.user,userT0:t.userT0,userScale:t.userScale});
+          b.textContent="★";
+          this.hint.textContent=`Take ${t.n} kept — still here when you reopen this page in this browser. ⬇ downloads a file copy.`;}
+      }catch(e){this.hint.textContent="Could not save the take in this browser ("+e+").";}
+    };
+    chip.querySelector(".tdl").onclick=()=>{
+      const ty=t.blob.type||"";
+      const ext=ty.includes("mp4")?"m4a":ty.includes("ogg")?"ogg":"webm";
+      const a=document.createElement("a");a.href=t.url;
+      a.download=`${PAGESTEM} ${this.clipId.replace(/\//g,"-").replace(/\.mp3$/,"")} take${t.n}.${ext}`;
+      a.click();
+    };
+    chip.querySelector(".tdel").onclick=async()=>{
+      if(t.keptId){try{await dbDel(t.keptId);}catch(e){}}
+      if(curAudio===t.audio)stopAll();
+      URL.revokeObjectURL(t.url);
+      chip.remove();
+      this.takes=this.takes.filter(x=>x!==t);
+      if(this.sel===t)this.select(this.takes[this.takes.length-1]||null);
+    };
+    this.takes.push(t);
+    this.select(t);
+  },
+  select(t){
+    this.sel=t;
+    this.takes.forEach(x=>x.chip.classList.toggle("sel",x===t));
+    mine.disabled=both.disabled=!t;
+    this.drawUser();
+    if(t)this.hint.textContent=`Take ${t.n} selected — dashed = its shape. ▶ mine replays it · ▶ A/B plays target then you · ☆ keeps it in this browser · ⬇ downloads it.`;
+    else this.hint.textContent="";
+  },
   playMine(btn){
-    if(!this.userAudio)return;
-    if(curAudio===this.userAudio&&!this.userAudio.paused){stopAll();return;}
+    const tk=this.sel;if(!tk)return;
+    const ua=tk.audio;
+    if(curAudio===ua&&!ua.paused){stopAll();return;}
     stopAll();
-    const ua=this.userAudio;ua.currentTime=0;ua._btn=btn||mine;
+    ua.currentTime=0;ua._btn=btn||mine;
     setOn(btn||mine);
     curAudio=ua;
     const tick=()=>{
       if(ua.paused){uph.setAttribute("opacity",0);return;}
-      const t=Math.max(0,Math.min((ua.currentTime-this.userT0)*this.userScale,clip.dur));
+      const t=Math.max(0,Math.min((ua.currentTime-tk.userT0)*tk.userScale,clip.dur));
       uph.setAttribute("opacity",1);
       uph.setAttribute("x1",xf(t));uph.setAttribute("x2",xf(t));
       requestAnimationFrame(tick);
@@ -338,13 +427,15 @@ function makeCard(clip,annot,drill){
   },
   drawUser(){
     ug.innerHTML="";
-    if(!this.user)return;
+    const tk=this.sel;
+    if(!tk||!tk.user)return;
     let d="",pv=null;
-    this.user.forEach(([t,s])=>{
+    tk.user.forEach(([t,s])=>{
       s=Math.max(Y_LO,Math.min(Y_HI,s));
       d+=(pv!==null&&t-pv<0.12?"L":"M")+xf(Math.min(t,clip.dur)).toFixed(1)+","+yf(s).toFixed(1);pv=t;});
     el("path",{d,fill:"none",stroke:"var(--user)","stroke-width":1.8,"stroke-dasharray":"5 3",opacity:.9},ug);
   }};
+  CARDMAP[cardObj.clipId]=cardObj;
   rec.onclick=()=>record(cardObj,rec);
   mine.onclick=()=>cardObj.playMine(mine);
   both.onclick=()=>{
@@ -411,13 +502,25 @@ DATA.drills.forEach((d,di)=>{
       rowEl.append(c1,mid,c2);body.appendChild(rowEl);
     }
   }else{
-    const g=document.createElement("div");g.className="grid";
+    const g=document.createElement("div");g.className="grid"+(DATA.wide?" one":"");
     d.clips.forEach(c=>g.appendChild(makeCard(c,d.annot,d)));
     body.appendChild(g);
   }
   sections.appendChild(sec);
 });
 if(location.hash)openSection(location.hash.slice(1));
+
+/* restore kept takes for this page (oldest first so take numbers are stable) */
+(async()=>{
+  try{
+    const rows=await dbAll(PAGE);
+    rows.sort((a,b)=>a.ts-b.ts);
+    rows.forEach(r=>{
+      const c=CARDMAP[r.clip];
+      if(c)c.addTake({blob:r.blob,user:r.user,userT0:r.userT0,userScale:r.userScale},r.id);
+    });
+  }catch(e){/* private-mode browsers may block IndexedDB — takes just won't persist */}
+})();
 </script>
 </body>
 </html>
