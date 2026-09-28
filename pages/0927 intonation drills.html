@@ -215,7 +215,13 @@ async function record(card,btn){
   ctx.createMediaStreamSource(stream).connect(an);
   const buf=new Float32Array(an.fftSize);
   const samples=[];const t0=performance.now();
-  const chunks=[];const mediaRec=new MediaRecorder(stream);
+  // prefer true AAC so downloaded takes are universally playable .m4a
+  // (mp4a.40.2 = AAC-LC; plain audio/mp4 could be opus-in-mp4, which
+  // QuickTime/iOS refuse — webm only where mp4 is unsupported entirely)
+  const mime=["audio/mp4;codecs=mp4a.40.2","audio/mp4"].find(t=>
+    window.MediaRecorder&&MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t))||"";
+  const chunks=[];const mediaRec=mime?new MediaRecorder(stream,{mimeType:mime})
+    :new MediaRecorder(stream);
   mediaRec.ondataavailable=e=>chunks.push(e.data);
   mediaRec.start();
   btn.classList.add("on");btn.textContent="■ stop";
