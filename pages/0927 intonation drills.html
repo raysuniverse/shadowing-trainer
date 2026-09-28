@@ -163,6 +163,11 @@ async function ghReq(method,path,body){
     headers:{Authorization:"Bearer "+ghToken(),Accept:"application/vnd.github+json"},
     body:body?JSON.stringify(body):undefined});
   if(r.status===404)return null;
+  if(r.status===401||r.status===403){
+    // bad/expired token — forget it so the next ☁ reopens the setup panel
+    try{localStorage.removeItem("ghTakesToken");}catch(e){}
+    throw new Error("the saved token was rejected ("+r.status+") — click ☁ again to paste a fresh one");
+  }
   if(!r.ok)throw new Error("GitHub said "+r.status);
   return r.json();
 }
@@ -494,7 +499,7 @@ function makeCard(clip,annot,drill){
         this.hint.textContent=`Take ${t.n} published — it is PUBLIC and appears for anyone who opens this page (allow ~a minute).`;
       }catch(e){
         pub.disabled=false;
-        this.hint.textContent="Publish failed: "+e.message+" — check the token in ☁ setup (record a new token by clearing site data), or your connection.";
+        this.hint.textContent="Publish failed: "+e.message;
       }
     };
     chip.querySelector(".tdl").onclick=()=>{
