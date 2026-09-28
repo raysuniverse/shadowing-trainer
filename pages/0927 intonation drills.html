@@ -154,7 +154,7 @@ async function dbAll(page){const d=await db();return new Promise((res,rej)=>{
 
 /* ---------- published takes (stored in the site's GitHub repo) ---------- */
 const REPO=DATA.repo||"";
-const RAW=REPO?`https://raw.githubusercontent.com/${REPO}/main/`:"";
+const RAW=REPO?`https://raw.githubusercontent.com/${REPO}/HEAD/`:"";
 const API=REPO?`https://api.github.com/repos/${REPO}/contents/`:"";
 const TAKESDIR="takes/"+PAGESTEM+"/";
 function ghToken(){try{return localStorage.getItem("ghTakesToken")||"";}catch(e){return"";}}
