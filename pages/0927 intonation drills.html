@@ -85,6 +85,12 @@ section.open .secbody{display:block}
 .tbtn.tkeep{font-size:13px}
 .tbtn:disabled{opacity:.4;cursor:default}
 .take.pub{border-style:dashed;border-color:#a8c7ee}
+.grps{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
+.grps .glab{font-size:11px;color:var(--mute)}
+.gbtn{border:1px solid var(--border);border-radius:100px;background:#fff;font:inherit;
+  font-size:11.5px;padding:2px 10px;cursor:pointer;color:var(--ink2);max-width:230px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gbtn.on{border-color:var(--target);background:var(--targetLight);color:var(--ink)}
 #ghsetup{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;
   background:#fff;border:1px solid var(--border);border-radius:16px;padding:20px 22px;
   max-width:440px;box-shadow:0 6px 30px rgba(0,0,0,.25);font-size:13px}
@@ -114,6 +120,8 @@ footer{margin-top:50px;color:var(--mute);font-size:12px;border-top:1px solid var
   <footer>Semitones are relative to the speaker's overall median (0 line), the same reference for every clip. Your recorded contour is plotted
   against <i>your own</i> median, so only the shape is compared. Floor line = this clip's 5th
   percentile; ceiling guide = +4 st.<br>
+  Longer sentences show a <b>thought groups</b> row — pick a group and play / loop / record
+  work on just that span (the shaded region); "all" returns to the full sentence.
   Recordings become <b>takes</b> under each card — record as many as you like and click a chip
   to switch between them. <b>★</b> keeps a take in this browser (on this device) across
   reloads; <b>☁</b> publishes it onto this site so anyone opening the page — e.g. your coach —
@@ -194,7 +202,7 @@ async function publishTake(card,t){
   const man=await ghReq("GET",TAKESDIR+"index.json");
   const list=manifestParse(man);
   const entry={clip:card.clipId,file:fname,ts,
-    user:t.user,userT0:t.userT0,userScale:t.userScale};
+    user:t.user,userT0:t.userT0,userScale:t.userScale,g:t.g||null};
   list.push(entry);
   await manifestWrite(list,man?man.sha:null);
   return entry;
@@ -289,11 +297,11 @@ function stopRec(){
       const fs=s.map(p=>p.f).sort((a,b)=>a-b);
       const med=fs[Math.floor(fs.length/2)];
       const t0=s[0].t, span=s[s.length-1].t-t0 || 1;
-      const scale=card.clip.dur/Math.max(span, 0.4);
+      const scale=rs.spanDur/Math.max(span, 0.4);
       const user=s.map(p=>[(p.t-t0)*scale, 12*Math.log2(p.f/med)]);
       rs.mediaRec.onstop=()=>{
         const blob=new Blob(rs.chunks,{type:rs.mediaRec.mimeType||"audio/webm"});
-        card.addTake({blob,user,userT0:t0,userScale:scale});
+        card.addTake({blob,user,userT0:t0,userScale:scale,g:rs.g});
       };
     }
     rs.mediaRec.stop();
@@ -324,13 +332,15 @@ async function record(card,btn){
   mediaRec.ondataavailable=e=>chunks.push(e.data);
   mediaRec.start();
   btn.classList.add("on");btn.textContent="■ stop";
-  card.hint.textContent="Recording — say the sentence…";
-  recState={ctx,stream,btn,card,samples,mediaRec,chunks,
+  const g=card.grpObj||null;
+  const spanDur=g?g.b-g.a:card.clip.dur;
+  card.hint.textContent=g?`Recording — say thought group ${g.n}…`:"Recording — say the sentence…";
+  recState={ctx,stream,btn,card,samples,mediaRec,chunks,g,spanDur,
     timer:setInterval(()=>{
       const t=(performance.now()-t0)/1000;
       an.getFloatTimeDomainData(buf);
       samples.push({t,f:autoCorrelate(buf,ctx.sampleRate)});
-      if(t>card.clip.dur*2+1.2)stopRec();
+      if(t>spanDur*2+1.2)stopRec();
     },25)};
 }
 
@@ -372,6 +382,8 @@ function makeCard(clip,annot,drill){
     d+=`L${xf(clip.intensity[clip.intensity.length-1][0])},${H-MB}Z`;
     el("path",{d,fill:"var(--targetLight)",opacity:.55},svg);
   }
+  // selected thought-group shading (kept under the contour)
+  const grect=el("rect",{x:0,y:MT,width:0,height:H-MT-MB,fill:"#f3e8fd",opacity:0},svg);
   /* drill annotations under the contour */
   if(annot==="ceiling"){
     const cl=(drill&&drill.ceilSt)||4;
@@ -446,6 +458,24 @@ function makeCard(clip,annot,drill){
     requestAnimationFrame(tickTarget);
   };
   a.addEventListener("play",()=>requestAnimationFrame(tickTarget));
+  // thought-group bar: practice a long sentence span by span
+  let grpBtns=null;
+  if(clip.groups&&clip.groups.length>1){
+    const bar=document.createElement("div");bar.className="grps";
+    bar.innerHTML=`<span class="glab">thought groups:</span>`;
+    grpBtns=[];
+    const allBtn=document.createElement("button");allBtn.className="gbtn on";allBtn.textContent="all";
+    allBtn.onclick=()=>cardObj.setGrp(null);
+    bar.appendChild(allBtn);grpBtns.push([allBtn,null]);
+    clip.groups.forEach(g=>{
+      const b=document.createElement("button");b.className="gbtn";
+      b.textContent=`${g.n} · ${g.text.replace(/[,.;:]$/,"")}`;
+      b.title=g.text;
+      b.onclick=()=>cardObj.setGrp(g);
+      bar.appendChild(b);grpBtns.push([b,g]);
+    });
+    card.appendChild(bar);
+  }
   card.appendChild(svg);
   const takesEl=document.createElement("div");takesEl.className="takes";card.appendChild(takesEl);
   const hint=document.createElement("div");hint.className="hint";card.appendChild(hint);
@@ -467,18 +497,64 @@ function makeCard(clip,annot,drill){
         slow=card.querySelector(".slow"),rec=card.querySelector(".rec"),
         mine=card.querySelector(".mine"),both=card.querySelector(".both");
   let looping=false,rate=1;
-  loop.onclick=()=>{looping=!looping;loop.classList.toggle("on",looping);if(curAudio===a)a.loop=looping;};
+  loop.onclick=()=>{looping=!looping;loop.classList.toggle("on",looping);};
   slow.onclick=()=>{rate=rate===1?0.75:1;slow.classList.toggle("on",rate!==1);if(curAudio===a)a.playbackRate=rate;};
-  play.onclick=()=>playClip(a,play,looping,rate);
-  const cardObj={clip,hint,takes:[],sel:null,nextN:1,
+  // span-aware playback: full clip, or just the selected thought group
+  function playSpan(btn,cb){
+    if(curAudio===a&&!a.paused){stopAll();return;}
+    stopAll();
+    const g=cardObj.grpObj,r0=g?g.a:0,r1=g?g.b:clip.dur;
+    a.loop=false;a.playbackRate=rate;a.currentTime=r0;a._btn=btn;
+    setOn(btn);curAudio=a;
+    // session token: a newer playback (or stop) invalidates this guard.
+    // rAF can fire before play() actually starts, so "paused" only ends the
+    // guard once playback has genuinely begun.
+    const sess=a._sess=(a._sess||0)+1;
+    const born=performance.now();
+    let started=false;
+    const guard=()=>{
+      if(a._sess!==sess)return;
+      if(!started){
+        if(!a.paused)started=true;
+        else if(performance.now()-born>5000)return;
+        requestAnimationFrame(guard);return;
+      }
+      if(a.paused)return;
+      if(a.currentTime>=r1-0.02){
+        if(looping)a.currentTime=r0;
+        else{a.pause();clearOn(btn);if(curAudio===a)curAudio=null;if(cb)cb();return;}
+      }
+      requestAnimationFrame(guard);
+    };
+    a.onended=()=>{
+      if(a._sess!==sess)return;
+      if(looping){a.currentTime=r0;a.play();}
+      else{clearOn(btn);if(curAudio===a)curAudio=null;if(cb)cb();}
+    };
+    a.play();requestAnimationFrame(guard);
+  }
+  play.onclick=()=>playSpan(play);
+  const cardObj={clip,hint,takes:[],sel:null,nextN:1,grpObj:null,
   clipId:(drill&&drill.key?drill.key+"/":"")+clip.file,
+  setGrp(g){
+    this.grpObj=g||null;
+    if(grpBtns)grpBtns.forEach(([b,bg])=>b.classList.toggle("on",
+      this.grpObj?(bg&&bg.n===this.grpObj.n):bg===null));
+    if(this.grpObj){
+      grect.setAttribute("x",xf(this.grpObj.a));
+      grect.setAttribute("width",Math.max(0,xf(this.grpObj.b)-xf(this.grpObj.a)));
+      grect.setAttribute("opacity",.5);
+      this.hint.textContent=`Thought group ${this.grpObj.n} — play · loop · 0.75× · record now use just this span.`;
+    }else grect.setAttribute("opacity",0);
+  },
   addTake(t,keptId){
     t.n=this.nextN++;
     t.url=URL.createObjectURL(t.blob);
     t.audio=new Audio(t.url);
     t.keptId=keptId||null;
+    t.g=t.g||null;
     const chip=document.createElement("span");chip.className="take";
-    chip.innerHTML=`<b>take ${t.n}</b><button class="tbtn tplay" title="play this take">▶</button>`+
+    chip.innerHTML=`<b>take ${t.n}${t.g?" · g"+t.g.n:""}</b><button class="tbtn tplay" title="play this take">▶</button>`+
       `<button class="tbtn tkeep" title="keep in this browser">${t.keptId?"★":"☆"}</button>`+
       (REPO?`<button class="tbtn tpub" title="publish to the site so your coach can hear it (public)">☁</button>`:"")+
       `<button class="tbtn tdl" title="download as a file">⬇</button>`+
@@ -492,7 +568,7 @@ function makeCard(clip,annot,drill){
         if(t.keptId){await dbDel(t.keptId);t.keptId=null;b.textContent="☆";
           this.hint.textContent=`Take ${t.n} no longer kept (gone after reload).`;}
         else{t.keptId=await dbAdd({page:PAGE,clip:this.clipId,ts:Date.now(),
-            blob:t.blob,user:t.user,userT0:t.userT0,userScale:t.userScale});
+            blob:t.blob,user:t.user,userT0:t.userT0,userScale:t.userScale,g:t.g});
           b.textContent="★";
           this.hint.textContent=`Take ${t.n} kept — still here when you reopen this page in this browser. ⬇ downloads a file copy.`;}
       }catch(e){this.hint.textContent="Could not save the take in this browser ("+e+").";}
@@ -522,7 +598,8 @@ function makeCard(clip,annot,drill){
     chip.querySelector(".tdel").onclick=async()=>{
       if(t.keptId){try{await dbDel(t.keptId);}catch(e){}}
       if(curAudio===t.audio)stopAll();
-      URL.revokeObjectURL(t.url);
+      // the blob URL is NOT revoked here — the audio element still references
+      // it and revoking logs a load error; the page unload frees it anyway
       chip.remove();
       this.takes=this.takes.filter(x=>x!==t);
       if(this.sel===t)this.select(this.takes[this.takes.length-1]||null);
@@ -531,11 +608,11 @@ function makeCard(clip,annot,drill){
     this.select(t);
   },
   addPublished(e){
-    const t={pub:e,user:e.user,userT0:e.userT0,userScale:e.userScale,
+    const t={pub:e,user:e.user,userT0:e.userT0,userScale:e.userScale,g:e.g||null,
       audio:new Audio(RAW+TAKESDIR+encodeURIComponent(e.file))};
     const when=new Date(e.ts).toLocaleDateString(undefined,{month:"short",day:"numeric"});
     const chip=document.createElement("span");chip.className="take pub";
-    chip.innerHTML=`<b>☁ ${when}</b><button class="tbtn tplay" title="play published take">▶</button>`+
+    chip.innerHTML=`<b>☁ ${when}${t.g?" · g"+t.g.n:""}</b><button class="tbtn tplay" title="play published take">▶</button>`+
       `<button class="tbtn tdel" title="remove from the site">✕</button>`;
     t.chip=chip;takesEl.appendChild(chip);
     chip.onclick=ev=>{if(!ev.target.classList.contains("tbtn"))this.select(t);};
@@ -559,6 +636,11 @@ function makeCard(clip,annot,drill){
     this.sel=t;
     this.takes.forEach(x=>x.chip.classList.toggle("sel",x===t));
     mine.disabled=both.disabled=!t;
+    if(t){
+      // a take recorded on a thought group re-selects that group (canonical object)
+      const cg=t.g&&clip.groups?clip.groups.find(x=>x.n===t.g.n)||t.g:t.g;
+      this.setGrp(cg||null);
+    }
     this.drawUser();
     if(t&&t.pub)this.hint.textContent="Published take selected — dashed = its shape. ▶ mine replays it · ▶ A/B plays target then you.";
     else if(t)this.hint.textContent=`Take ${t.n} selected — dashed = its shape. ▶ mine replays it · ▶ A/B plays target then you · ☆ keeps it in this browser · ☁ publishes it for your coach · ⬇ downloads it.`;
@@ -572,9 +654,10 @@ function makeCard(clip,annot,drill){
     ua.currentTime=0;ua._btn=btn||mine;
     setOn(btn||mine);
     curAudio=ua;
+    const off=tk.g?tk.g.a:0,span=tk.g?tk.g.b-tk.g.a:clip.dur;
     const tick=()=>{
       if(ua.paused){uph.setAttribute("opacity",0);return;}
-      const t=Math.max(0,Math.min((ua.currentTime-tk.userT0)*tk.userScale,clip.dur));
+      const t=off+Math.max(0,Math.min((ua.currentTime-tk.userT0)*tk.userScale,span));
       uph.setAttribute("opacity",1);
       uph.setAttribute("x1",xf(t));uph.setAttribute("x2",xf(t));
       requestAnimationFrame(tick);
@@ -586,23 +669,17 @@ function makeCard(clip,annot,drill){
     ug.innerHTML="";
     const tk=this.sel;
     if(!tk||!tk.user)return;
+    const off=tk.g?tk.g.a:0,end=tk.g?tk.g.b:clip.dur;
     let d="",pv=null;
     tk.user.forEach(([t,s])=>{
       s=Math.max(Y_LO,Math.min(Y_HI,s));
-      d+=(pv!==null&&t-pv<0.12?"L":"M")+xf(Math.min(t,clip.dur)).toFixed(1)+","+yf(s).toFixed(1);pv=t;});
+      d+=(pv!==null&&t-pv<0.12?"L":"M")+xf(Math.min(off+t,end)).toFixed(1)+","+yf(s).toFixed(1);pv=t;});
     el("path",{d,fill:"none",stroke:"var(--user)","stroke-width":1.8,"stroke-dasharray":"5 3",opacity:.9},ug);
   }};
   CARDMAP[cardObj.clipId]=cardObj;
   rec.onclick=()=>record(cardObj,rec);
   mine.onclick=()=>cardObj.playMine(mine);
-  both.onclick=()=>{
-    if(curAudio===a&&!a.paused){stopAll();return;}
-    stopAll();
-    a.loop=false;a.playbackRate=1;a.currentTime=0;a._btn=both;
-    setOn(both);curAudio=a;
-    a.onended=()=>{setTimeout(()=>{cardObj.playMine(both);},300);};
-    a.play();
-  };
+  both.onclick=()=>playSpan(both,()=>setTimeout(()=>{cardObj.playMine(both);},300));
   card._audio=a;
   return card;
 }
@@ -674,7 +751,7 @@ if(location.hash)openSection(location.hash.slice(1));
     rows.sort((a,b)=>a.ts-b.ts);
     rows.forEach(r=>{
       const c=CARDMAP[r.clip];
-      if(c)c.addTake({blob:r.blob,user:r.user,userT0:r.userT0,userScale:r.userScale},r.id);
+      if(c)c.addTake({blob:r.blob,user:r.user,userT0:r.userT0,userScale:r.userScale,g:r.g||null},r.id);
     });
   }catch(e){/* private-mode browsers may block IndexedDB — takes just won't persist */}
   loadPublished();
