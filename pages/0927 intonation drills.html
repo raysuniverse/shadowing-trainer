@@ -85,6 +85,12 @@ section.open .secbody{display:block}
 .tbtn.tkeep{font-size:13px}
 .tbtn:disabled{opacity:.4;cursor:default}
 .take.pub{border-style:dashed;border-color:#a8c7ee}
+/* sentence-as-melody: words colored + raised/lowered by pitch */
+.prow{display:flex;gap:10px;align-items:flex-start;margin-top:2px}
+.prow .plab{flex:0 0 34px;font-size:10px;color:var(--mute);margin-top:16px;
+  text-transform:uppercase;letter-spacing:.4px;text-align:right}
+.ptxt{line-height:2.6;padding:4px 0 0;font-size:14px;font-weight:600}
+.ptxt .pw{display:inline-block}
 .grps{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
 .grps .glab{font-size:11px;color:var(--mute)}
 .gbtn{border:1px solid var(--border);border-radius:100px;background:#fff;font:inherit;
@@ -120,6 +126,10 @@ footer{margin-top:50px;color:var(--mute);font-size:12px;border-top:1px solid var
   <footer>Semitones are relative to the speaker's overall median (0 line), the same reference for every clip. Your recorded contour is plotted
   against <i>your own</i> median, so only the shape is compared. Floor line = this clip's 5th
   percentile; ceiling guide = +4 st.<br>
+  The sentence text itself is drawn as a melody — each word colored (blue = low, red = high)
+  and raised or lowered by its pitch vs the speaker's median; after you record, a second
+  "you" line renders <i>your</i> melody on the same words for side-by-side comparison
+  (your colors are relative to your own median, so only the shape is compared).
   Longer sentences show a <b>thought groups</b> row — pick a group and play / loop / record
   work on just that span (the shaded region); "all" returns to the full sentence.
   Recordings become <b>takes</b> under each card — record as many as you like and click a chip
@@ -344,6 +354,23 @@ async function record(card,btn){
     },25)};
 }
 
+/* ---------- sentence-as-melody rendering (shirley-study form) ---------- */
+const PT_LOW=[26,86,196],PT_MID=[95,99,104],PT_HIGH=[234,67,53];
+function ptColor(rel){
+  const t=Math.max(-1,Math.min(1,rel/10));
+  const m=t>=0?PT_HIGH:PT_LOW,k=Math.abs(t);
+  const c=PT_MID.map((v,i)=>Math.round(v+(m[i]-v)*k));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function ptEsc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function ptHtml(items){
+  return '<div class="ptxt">'+items.map(it=>{
+    if(it.rel==null)return `<span class="pw" style="color:#9AA0A6">${ptEsc(it.w)}</span>`;
+    const dy=-Math.max(-11,Math.min(11,it.rel*1.1));
+    return `<span class="pw" style="color:${ptColor(it.rel)};transform:translateY(${dy.toFixed(0)}px)">${ptEsc(it.w)}</span>`;
+  }).join(" ")+"</div>";
+}
+
 /* ---------- card rendering ---------- */
 const W=DATA.wide?1000:520,H=170,ML=34,MR=12,MT=10,MB=24;
 function yf(s){return MT+(Y_HI-s)/(Y_HI-Y_LO)*(H-MT-MB);}
@@ -458,6 +485,13 @@ function makeCard(clip,annot,drill){
     requestAnimationFrame(tickTarget);
   };
   a.addEventListener("play",()=>requestAnimationFrame(tickTarget));
+  // sentence-as-melody rows: the model voice, and (after recording) yours
+  const herRow=document.createElement("div");herRow.className="prow";
+  herRow.innerHTML=`<span class="plab">model</span>`+
+    ptHtml(clip.words.map(w=>({w:w.w,rel:w.stMean})));
+  card.appendChild(herRow);
+  const youRow=document.createElement("div");youRow.className="prow you";
+  youRow.style.display="none";card.appendChild(youRow);
   // thought-group bar: practice a long sentence span by span
   let grpBtns=null;
   if(clip.groups&&clip.groups.length>1){
@@ -665,7 +699,25 @@ function makeCard(clip,annot,drill){
     ua.onended=()=>{clearOn(btn||mine);uph.setAttribute("opacity",0);};
     ua.play();requestAnimationFrame(tick);
   },
+  updateYouRow(){
+    const tk=this.sel;
+    if(!tk||!tk.user){youRow.style.display="none";return;}
+    const off=tk.g?tk.g.a:0,end=tk.g?tk.g.b:clip.dur;
+    const items=clip.words
+      .filter(w=>w.t1>off-0.05&&w.t0<end+0.05)
+      .map(w=>{
+        let sum=0,n=0;
+        tk.user.forEach(([t,s])=>{
+          const T=off+t;
+          if(T>=w.t0-0.02&&T<=w.t1+0.02){sum+=s;n++;}
+        });
+        return {w:w.w,rel:n?sum/n:null};
+      });
+    youRow.innerHTML=`<span class="plab">you</span>`+ptHtml(items);
+    youRow.style.display="";
+  },
   drawUser(){
+    this.updateYouRow();
     ug.innerHTML="";
     const tk=this.sel;
     if(!tk||!tk.user)return;
