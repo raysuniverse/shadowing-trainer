@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 10 Q4 3 8 8 T15 6' fill='none' stroke='%232a78d6' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>Intonation Drills — Targeted Training</title>
 <style>
 :root{
@@ -102,18 +103,22 @@ footer{margin-top:50px;color:var(--mute);font-size:12px;border-top:1px solid var
 const DATA = JSON.parse(document.getElementById("payload").textContent);
 const tip = document.getElementById("tip");
 const NS = "http://www.w3.org/2000/svg";
-const Y_LO = -12, Y_HI = 16;
+const Y_LO = DATA.yLo!==undefined?DATA.yLo:-12, Y_HI = DATA.yHi!==undefined?DATA.yHi:16;
 function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e;}
 function fmt(v){return (v>0?"+":"")+v.toFixed(1)+" st";}
 
 /* ---------- audio helpers ---------- */
 let curAudio=null;
-function stopAll(){ if(curAudio){curAudio.pause();curAudio._btn&&curAudio._btn.classList.remove("on");} curAudio=null;
+function setOn(btn){if(!btn)return;btn.classList.add("on");
+  if(!btn._orig)btn._orig=btn.textContent;btn.textContent="■ stop";}
+function clearOn(btn){if(!btn)return;btn.classList.remove("on");
+  if(btn._orig)btn.textContent=btn._orig;}
+function stopAll(){ if(curAudio){curAudio.pause();clearOn(curAudio._btn);} curAudio=null;
   if(recState){stopRec();} }
 function playClip(a,btn,loop,rate){
   if(curAudio===a && !a.paused){stopAll();return;}
   stopAll(); a.loop=loop; a.playbackRate=rate; a.currentTime=0; a._btn=btn;
-  btn.classList.add("on"); a.onended=()=>{if(!a.loop)btn.classList.remove("on");};
+  setOn(btn); a.onended=()=>{if(!a.loop)clearOn(btn);};
   curAudio=a; a.play();
 }
 
@@ -242,9 +247,11 @@ function makeCard(clip,annot,drill){
     el("rect",{x:xf(lw.t0),y:MT,width:xf(Math.min(lw.t1+0.15,clip.dur))-xf(lw.t0),height:H-MT-MB,
       fill:"#fdf3dd",opacity:.7},svg);
   }
-  // pitch contour
+  // pitch contour (clamped to the plot window so extremes don't spill
+  // over the word labels; the tooltip still reports the true value)
   let d="",prev=null;
-  clip.st.forEach(([t,s])=>{d+=(prev&&t-prev<0.09?"L":"M")+xf(t).toFixed(1)+","+yf(s).toFixed(1);prev=t;});
+  clip.st.forEach(([t,s])=>{s=Math.max(Y_LO,Math.min(Y_HI,s));
+    d+=(prev&&t-prev<0.09?"L":"M")+xf(t).toFixed(1)+","+yf(s).toFixed(1);prev=t;});
   el("path",{d,fill:"none",stroke:"var(--target)","stroke-width":2.2,"stroke-linecap":"round","stroke-linejoin":"round"},svg);
   // final-glide arrow for fall / sq
   if((annot==="fall"||annot==="sq")&&clip.st.length>3&&lw){
@@ -268,11 +275,17 @@ function makeCard(clip,annot,drill){
     });
     el("path",{d:pd,fill:"none",stroke:"var(--accent)","stroke-width":1.2,"stroke-dasharray":"4 4"},svg);
   }
-  // word labels
+  // word labels — two alternating rows; skip a label when it would overlap
+  // the previous one in its row (long sentences get too dense otherwise)
+  const rowEnd=[-1e9,-1e9];
   clip.words.forEach((w,i)=>{
-    const t=el("text",{x:xf((w.t0+w.t1)/2),y:H-(i%2?2:11),"text-anchor":"middle","font-size":9.5,
+    const label=w.w.replace(/[,.?]$/,"");
+    const x=xf((w.t0+w.t1)/2),row=i%2,half=label.length*2.6;
+    if(x-half<rowEnd[row])return;
+    rowEnd[row]=x+half+4;
+    const t=el("text",{x,y:H-(row?2:11),"text-anchor":"middle","font-size":9.5,
       fill:"var(--ink2)"},svg);
-    t.textContent=w.w.replace(/[,.?]$/,"");
+    t.textContent=label;
   });
   // arrow marker defs
   const defs=el("defs",{},svg);
@@ -311,7 +324,7 @@ function makeCard(clip,annot,drill){
     if(curAudio===this.userAudio&&!this.userAudio.paused){stopAll();return;}
     stopAll();
     const ua=this.userAudio;ua.currentTime=0;ua._btn=btn||mine;
-    (btn||mine).classList.add("on");
+    setOn(btn||mine);
     curAudio=ua;
     const tick=()=>{
       if(ua.paused){uph.setAttribute("opacity",0);return;}
@@ -320,7 +333,7 @@ function makeCard(clip,annot,drill){
       uph.setAttribute("x1",xf(t));uph.setAttribute("x2",xf(t));
       requestAnimationFrame(tick);
     };
-    ua.onended=()=>{(btn||mine).classList.remove("on");uph.setAttribute("opacity",0);};
+    ua.onended=()=>{clearOn(btn||mine);uph.setAttribute("opacity",0);};
     ua.play();requestAnimationFrame(tick);
   },
   drawUser(){
@@ -338,7 +351,7 @@ function makeCard(clip,annot,drill){
     if(curAudio===a&&!a.paused){stopAll();return;}
     stopAll();
     a.loop=false;a.playbackRate=1;a.currentTime=0;a._btn=both;
-    both.classList.add("on");curAudio=a;
+    setOn(both);curAudio=a;
     a.onended=()=>{setTimeout(()=>{cardObj.playMine(both);},300);};
     a.play();
   };
@@ -385,11 +398,14 @@ DATA.drills.forEach((d,di)=>{
         lbl=`reset ↑ ${jump.toFixed(1)} st`;
       }else lbl="same words";
       mid.innerHTML=`<span class="rst">${lbl}</span><button class="btn">▶ pair</button>`;
-      mid.querySelector(".btn").onclick=()=>{
-        stopAll();
+      const pairBtn=mid.querySelector(".btn");
+      pairBtn.onclick=()=>{
         const a1=c1._audio,a2=c2._audio;
-        a1.loop=false;a1.playbackRate=1;a1.currentTime=0;curAudio=a1;
-        a1.onended=()=>{setTimeout(()=>{a2.loop=false;a2.playbackRate=1;a2.currentTime=0;curAudio=a2;a2.play();},350);};
+        if((curAudio===a1||curAudio===a2)&&!curAudio.paused){stopAll();return;}
+        stopAll();
+        a1.loop=false;a1.playbackRate=1;a1.currentTime=0;a1._btn=pairBtn;curAudio=a1;setOn(pairBtn);
+        a1.onended=()=>{setTimeout(()=>{a2.loop=false;a2.playbackRate=1;a2.currentTime=0;
+          a2._btn=pairBtn;curAudio=a2;a2.onended=()=>clearOn(pairBtn);a2.play();},350);};
         a1.play();
       };
       rowEl.append(c1,mid,c2);body.appendChild(rowEl);
